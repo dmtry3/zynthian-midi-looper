@@ -39,7 +39,7 @@ MIDI-лупер для [Zynthian](https://zynthian.org): **LV2-плагин (MID
 ## Установка
 
 ```bash
-git clone https://github.com/<you>/zynthian-midi-looper.git
+git clone https://github.com/dmtry3/zynthian-midi-looper.git
 cd zynthian-midi-looper
 sudo ./scripts/install.sh      # собирает плагин и создаёт две ссылки (см. ниже)
 sudo systemctl restart zynthian

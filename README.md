@@ -39,7 +39,7 @@ a loop to a Standard MIDI File and straight into a `zynseq` pattern.
 ## Installation
 
 ```bash
-git clone https://github.com/<you>/zynthian-midi-looper.git
+git clone https://github.com/dmtry3/zynthian-midi-looper.git
 cd zynthian-midi-looper
 sudo ./scripts/install.sh      # builds the plugin and creates two symlinks (see below)
 sudo systemctl restart zynthian
