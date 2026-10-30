@@ -1,6 +1,7 @@
 # MIDI Looper for Zynthian
 
 [Русская версия](README.ru.md)
+Demo video https://www.youtube.com/watch?v=ChqsykTJQ88
 
 A MIDI looper for [Zynthian](https://zynthian.org) implemented as an **LV2 MIDI-tool plugin** that sits inside a
 chain, plus an optional **on-screen widget** (piano roll, layers, slots) for the Zynthian touch UI.
