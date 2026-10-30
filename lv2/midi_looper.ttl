@@ -19,6 +19,8 @@
 <urn:midilooper:looper>
     a lv2:Plugin , lv2:UtilityPlugin ;
     doap:name "MIDI Looper" ;
+    lv2:minorVersion 8 ;
+    lv2:microVersion 0 ;
     lv2:requiredFeature urid:map ;
     lv2:port
     [
