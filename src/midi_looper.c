@@ -29,9 +29,9 @@
 #define MAX_TOUCH 48
 #define PREROLL 360.0
 #define WRAP_SNAP 240          /* ticks: an overdubbed note pressed this close to the loop end is placed at the loop start */
-#define N_IN 25
+#define N_IN 33
 #define N_OUT 11
-#define OUT_BASE 27
+#define OUT_BASE 35
 #define VIZ_MAGIC 0x4D4C5A31u
 
 enum { ST_EMPTY = 0, ST_ARM_REC, ST_REC, ST_ARM_STOP, ST_PLAY, ST_OVERDUB, ST_STOP, ST_ARM_PLAY };
@@ -41,7 +41,7 @@ enum { C_REC = 0, C_PLAY, C_UNDO, C_CLEAR,
        I_QGRID, I_QSTR, I_QTARGET, C_QAPPLY,
        I_ELAYER, I_TRANSP, C_EAPPLY,
        I_SLOT, C_SAVE, C_LOAD, C_SDEL,
-       I_QMASK, C_EXPORT };
+       I_QMASK, C_EXPORT, I_CCM0 };
 enum { O_STATE = 0, O_POS, O_BARS, O_LAYERS, O_MUTE, O_CONFIRM, O_BPM, O_BEAT, O_RUN, O_SLOTS, O_MSG };
 
 typedef struct { uint32_t tick, dur; uint8_t st, d1, d2, pad; } Ev;
@@ -56,6 +56,7 @@ typedef struct { double clk; uint8_t ch, p; } Off;
 typedef struct { uint32_t frame; uint8_t prio, st, d1, d2, final; } Out;
 typedef struct { uint8_t ch, p, vel, closed; double on_clk, dur; } Pre;
 typedef struct { uint16_t key; uint8_t used, active, rec; uint64_t last_sample; double last_clk; uint32_t last_tick; } Touch;
+typedef struct { uint16_t key; uint8_t val, used; uint64_t t; uint32_t tick; } CcIn;
 typedef struct { LV2_Atom_Event ev; uint8_t msg[3]; } MidiOut;
 /* widget snapshot header (96 bytes), followed by the layer events */
 typedef struct {
@@ -109,11 +110,15 @@ typedef struct {
   VizCc* ccout;
   uint64_t cc_out_t[16][128];
   uint8_t cc_out_v[16][128];
+  CcIn cc_ring[16];
+  int cc_ring_i;
+  uint8_t learned[16];
 
   float prev[N_IN];
   uint64_t rise_at[N_IN];
   int have_prev;
   uint64_t settle_until;
+  int restored_once;
   int confirm;
   uint64_t confirm_until;
 
@@ -370,6 +375,11 @@ static void rec_note_on(Looper* L, int ch, int p, int vel) {
 }
 
 /* ---------- CC, pitch bend, aftertouch: shared lane (not per layer) ---------- */
+static int cc_ignored(const Looper* L, uint8_t cc) {
+  int mask = (int)(*L->ctl[I_CCM0 + (cc >> 4)] + 0.5f);
+  if ((mask >> (cc & 15)) & 1) return 1;
+  return (L->learned[cc >> 3] >> (cc & 7)) & 1;
+}
 static uint16_t cc_key(uint8_t st, uint8_t d1) {
   uint8_t type = st & 0xF0;
   return (uint16_t)(((uint16_t)st << 8) | ((type == 0xB0 || type == 0xA0) ? d1 : 0));
@@ -429,6 +439,12 @@ static void cc_put(Looper* L, uint16_t key, uint8_t st, uint8_t d1, uint8_t d2, 
 /* A controller value arrived: touching the knob mutes its playback from the loop,
    and in REC/OVERDUB it also overwrites the lane; a pause > CC_GAP_SEC = the knob was released. */
 static void cc_event(Looper* L, uint8_t st, uint8_t d1, uint8_t d2) {
+  if ((st & 0xF0) == 0xB0 && cc_ignored(L, d1)) return;
+  if ((st & 0xF0) == 0xB0) {                    /* remember recent CC (used to learn the looper's own button CC) */
+    CcIn* r = &L->cc_ring[L->cc_ring_i++ & 15];
+    r->key = cc_key(st, d1); r->val = d2; r->used = 1;
+    r->t = L->samples + L->cur_frame; r->tick = rec_tick(L);
+  }
   const uint16_t key = cc_key(st, d1);
   Touch* t = touch_get(L, key);
   const int64_t gap = (int64_t)(CC_GAP_SEC * L->sr);
@@ -685,7 +701,48 @@ static int sel_from(const Looper* L, int ctl) {
   return s;
 }
 
+static void cc_remove_near(Looper* L, uint16_t key, uint32_t tick) {
+  uint32_t k = 0;
+  for (uint32_t i = 0; i < L->ncc; i++) {
+    const Ev* e = &L->cc[i];
+    if (cc_key(e->st, e->d1) == key && e->tick + 2 >= tick && e->tick <= tick + 2) continue;
+    if (k != i) L->cc[k] = L->cc[i];
+    k++;
+  }
+  L->ncc = k;
+}
+
+/* A command fired right after an isolated 0/127 CC: that CC is one of the looper's own buttons.
+   Learn it (never record/play it again) and erase the copy that may have been recorded. */
+static void learn_button_cc(Looper* L) {
+  const uint64_t now = L->samples + L->cur_frame;
+  const uint64_t win = (uint64_t)(0.15 * L->sr);
+  for (int i = 0; i < 16; i++) {
+    CcIn* e = &L->cc_ring[i];
+    if (!e->used || e->t > now || now - e->t > win) continue;
+    if ((e->key >> 8 & 0xF0) != 0xB0) continue;
+    uint8_t cc = (uint8_t)(e->key & 0xFF);
+    if (cc >= 64 && cc <= 67) continue;                  /* pedals */
+    if (e->val != 0 && e->val != 127) continue;
+    int isolated = 1;
+    for (int j = 0; j < 16; j++) {
+      const CcIn* o = &L->cc_ring[j];
+      if (j != i && o->used && o->key == e->key && o->t < e->t && e->t - o->t < (uint64_t)(0.15 * L->sr)) isolated = 0;
+    }
+    if (!isolated) continue;
+    L->learned[(cc >> 3) & 15] |= (uint8_t)(1u << (cc & 7));
+    cc_remove_near(L, e->key, e->tick);
+    e->used = 0;
+  }
+}
+
+/* leaving OVERDUB: a layer without any notes is not kept */
+static void drop_empty_overdub_layer(Looper* L) {
+  if (L->state == ST_OVERDUB && L->nlayers > 1 && L->layers[L->nlayers - 1].n == 0) L->nlayers--;
+}
+
 static void run_cmd(Looper* L, int cmd) {
+  learn_button_cc(L);
   if (cmd != C_CLEAR && cmd != C_LDEL && cmd != C_SDEL) L->confirm = 0;
   L->viz_dirty = 1;
   switch (cmd) {
@@ -701,12 +758,12 @@ static void run_cmd(Looper* L, int cmd) {
             L->nlayers++; L->nredo = 0; L->bk_valid = 0; L->state = ST_OVERDUB;
           }
           break;
-        case ST_OVERDUB: L->state = ST_PLAY; break;
+        case ST_OVERDUB: drop_empty_overdub_layer(L); L->state = ST_PLAY; break;
         default: break;
       }
       break;
     case C_PLAY:
-      if (L->state == ST_PLAY || L->state == ST_OVERDUB) { silence_loop(L); L->state = ST_STOP; }
+      if (L->state == ST_PLAY || L->state == ST_OVERDUB) { drop_empty_overdub_layer(L); silence_loop(L); L->state = ST_STOP; }
       else if (L->state == ST_STOP) arm_or_fire(L, ST_ARM_PLAY);
       else if (L->state == ST_ARM_PLAY) { L->state = ST_STOP; L->arm_clk = -1; }
       break;
@@ -788,11 +845,18 @@ static void process_controls(Looper* L) {
   for (int i = 0; i < N_IN; i++) cur[i] = *L->ctl[i];
   if (!L->have_prev) { memcpy(L->prev, cur, sizeof cur); L->have_prev = 1; return; }
   int changed = 0;
-  for (int i = 0; i < N_IN; i++) if (cur[i] != L->prev[i]) changed++;
+  for (int i = 0; i < N_IN; i++) {
+    if (i == I_QMASK || i >= I_CCM0) continue;
+    if (cur[i] != L->prev[i]) changed++;
+  }
   int restore = (changed >= 2) || (L->samples < L->settle_until);
   if (changed >= 2) L->settle_until = L->samples + (uint64_t)(0.2 * L->sr);
-  if (restore && cur[I_SLOT] != L->prev[I_SLOT] && cur[I_SLOT] >= 1)
-    request_load(L, (int)(cur[I_SLOT] + 0.5f));
+  if (restore && changed >= 2 && !L->restored_once) {   /* first parameter burst after start = snapshot restore */
+    L->restored_once = 1;
+    int sl = (int)(cur[I_SLOT] + 0.5f);
+    if (L->state == ST_EMPTY && sl >= 1 && sl <= 16 && (atomic_load(&L->slot_mask) & (1 << (sl - 1))))
+      request_load(L, sl);
+  }
   if (!restore && changed > 0) {
     static const int cmds[15] = { C_REC, C_PLAY, C_UNDO, C_CLEAR, C_LMUTE, C_LDEL, C_REDO,
                                   C_HALF, C_DOUBLE, C_QAPPLY, C_EAPPLY, C_SAVE, C_LOAD, C_SDEL, C_EXPORT };

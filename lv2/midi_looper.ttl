@@ -10,8 +10,8 @@
 @prefix rdfs:   <http://www.w3.org/2000/01/rdf-schema#> .
 
 <urn:midilooper:looper#g_loop>   a pg:Group ; lv2:symbol "g_loop"   ; lv2:name "Loop"     ; lv2:index 0 ; lv2:displayPriority 60 .
-<urn:midilooper:looper#g_layers> a pg:Group ; lv2:symbol "g_layers" ; lv2:name "Layers"   ; lv2:index 1 ; lv2:displayPriority 50 .
-<urn:midilooper:looper#g_timing> a pg:Group ; lv2:symbol "g_timing" ; lv2:name "Timing"   ; lv2:index 2 ; lv2:displayPriority 40 .
+<urn:midilooper:looper#g_layers> a pg:Group ; lv2:symbol "g_layers" ; lv2:name "Layers"   ; lv2:index 1 ; lv2:displayPriority 40 .
+<urn:midilooper:looper#g_timing> a pg:Group ; lv2:symbol "g_timing" ; lv2:name "Timing"   ; lv2:index 2 ; lv2:displayPriority 50 .
 <urn:midilooper:looper#g_quant>  a pg:Group ; lv2:symbol "g_quant"  ; lv2:name "Quantize" ; lv2:index 3 ; lv2:displayPriority 30 .
 <urn:midilooper:looper#g_edit>   a pg:Group ; lv2:symbol "g_edit"   ; lv2:name "Edit"     ; lv2:index 4 ; lv2:displayPriority 20 .
 <urn:midilooper:looper#g_slots>  a pg:Group ; lv2:symbol "g_slots"  ; lv2:name "Slots"    ; lv2:index 5 ; lv2:displayPriority 10 .
@@ -143,7 +143,7 @@
     ] , [
         a lv2:InputPort , lv2:ControlPort ;
         lv2:index 21 ; lv2:symbol "slot" ; lv2:name "Slot" ;
-        lv2:default 0 ; lv2:minimum 0 ; lv2:maximum 16 ; lv2:portProperty lv2:integer ;
+        lv2:default 1 ; lv2:minimum 1 ; lv2:maximum 16 ; lv2:portProperty lv2:integer ;
         lv2:displayPriority 40 ; pg:group <urn:midilooper:looper#g_slots> ;
     ] , [
         a lv2:InputPort , lv2:ControlPort ;
@@ -171,47 +171,87 @@
         lv2:default 0 ; lv2:minimum 0 ; lv2:maximum 1 ; lv2:portProperty lv2:toggled ;
         lv2:displayPriority 5 ; pg:group <urn:midilooper:looper#g_edit> ;
     ] , [
+        a lv2:InputPort , lv2:ControlPort ;
+        lv2:index 27 ; lv2:symbol "ccm0" ; lv2:name "CC Ignore 0" ;
+        lv2:default 0 ; lv2:minimum 0 ; lv2:maximum 65535 ;
+        lv2:portProperty lv2:integer , pprops:notOnGUI ;
+    ] , [
+        a lv2:InputPort , lv2:ControlPort ;
+        lv2:index 28 ; lv2:symbol "ccm1" ; lv2:name "CC Ignore 1" ;
+        lv2:default 0 ; lv2:minimum 0 ; lv2:maximum 65535 ;
+        lv2:portProperty lv2:integer , pprops:notOnGUI ;
+    ] , [
+        a lv2:InputPort , lv2:ControlPort ;
+        lv2:index 29 ; lv2:symbol "ccm2" ; lv2:name "CC Ignore 2" ;
+        lv2:default 0 ; lv2:minimum 0 ; lv2:maximum 65535 ;
+        lv2:portProperty lv2:integer , pprops:notOnGUI ;
+    ] , [
+        a lv2:InputPort , lv2:ControlPort ;
+        lv2:index 30 ; lv2:symbol "ccm3" ; lv2:name "CC Ignore 3" ;
+        lv2:default 0 ; lv2:minimum 0 ; lv2:maximum 65535 ;
+        lv2:portProperty lv2:integer , pprops:notOnGUI ;
+    ] , [
+        a lv2:InputPort , lv2:ControlPort ;
+        lv2:index 31 ; lv2:symbol "ccm4" ; lv2:name "CC Ignore 4" ;
+        lv2:default 0 ; lv2:minimum 0 ; lv2:maximum 65535 ;
+        lv2:portProperty lv2:integer , pprops:notOnGUI ;
+    ] , [
+        a lv2:InputPort , lv2:ControlPort ;
+        lv2:index 32 ; lv2:symbol "ccm5" ; lv2:name "CC Ignore 5" ;
+        lv2:default 0 ; lv2:minimum 0 ; lv2:maximum 65535 ;
+        lv2:portProperty lv2:integer , pprops:notOnGUI ;
+    ] , [
+        a lv2:InputPort , lv2:ControlPort ;
+        lv2:index 33 ; lv2:symbol "ccm6" ; lv2:name "CC Ignore 6" ;
+        lv2:default 0 ; lv2:minimum 0 ; lv2:maximum 65535 ;
+        lv2:portProperty lv2:integer , pprops:notOnGUI ;
+    ] , [
+        a lv2:InputPort , lv2:ControlPort ;
+        lv2:index 34 ; lv2:symbol "ccm7" ; lv2:name "CC Ignore 7" ;
+        lv2:default 0 ; lv2:minimum 0 ; lv2:maximum 65535 ;
+        lv2:portProperty lv2:integer , pprops:notOnGUI ;
+    ] , [
         a lv2:OutputPort , lv2:ControlPort ;
-        lv2:index 27 ; lv2:symbol "state" ; lv2:name "Out: State" ;
+        lv2:index 35 ; lv2:symbol "state" ; lv2:name "Out: State" ;
         lv2:default 0 ; lv2:minimum 0 ; lv2:maximum 7 ;
     ] , [
         a lv2:OutputPort , lv2:ControlPort ;
-        lv2:index 28 ; lv2:symbol "pos" ; lv2:name "Out: Pos" ;
+        lv2:index 36 ; lv2:symbol "pos" ; lv2:name "Out: Pos" ;
         lv2:default 0 ; lv2:minimum 0 ; lv2:maximum 1 ;
     ] , [
         a lv2:OutputPort , lv2:ControlPort ;
-        lv2:index 29 ; lv2:symbol "bars" ; lv2:name "Out: Bars" ;
+        lv2:index 37 ; lv2:symbol "bars" ; lv2:name "Out: Bars" ;
         lv2:default 0 ; lv2:minimum 0 ; lv2:maximum 100000 ;
     ] , [
         a lv2:OutputPort , lv2:ControlPort ;
-        lv2:index 30 ; lv2:symbol "layers" ; lv2:name "Out: Layers" ;
+        lv2:index 38 ; lv2:symbol "layers" ; lv2:name "Out: Layers" ;
         lv2:default 0 ; lv2:minimum 0 ; lv2:maximum 8 ;
     ] , [
         a lv2:OutputPort , lv2:ControlPort ;
-        lv2:index 31 ; lv2:symbol "mute" ; lv2:name "Out: Mute" ;
+        lv2:index 39 ; lv2:symbol "mute" ; lv2:name "Out: Mute" ;
         lv2:default 0 ; lv2:minimum 0 ; lv2:maximum 255 ;
     ] , [
         a lv2:OutputPort , lv2:ControlPort ;
-        lv2:index 32 ; lv2:symbol "confirm" ; lv2:name "Out: Confirm" ;
+        lv2:index 40 ; lv2:symbol "confirm" ; lv2:name "Out: Confirm" ;
         lv2:default 0 ; lv2:minimum 0 ; lv2:maximum 3 ;
     ] , [
         a lv2:OutputPort , lv2:ControlPort ;
-        lv2:index 33 ; lv2:symbol "bpm" ; lv2:name "Out: BPM" ;
+        lv2:index 41 ; lv2:symbol "bpm" ; lv2:name "Out: BPM" ;
         lv2:default 0 ; lv2:minimum 0 ; lv2:maximum 400 ;
     ] , [
         a lv2:OutputPort , lv2:ControlPort ;
-        lv2:index 34 ; lv2:symbol "beat" ; lv2:name "Out: Beat" ;
+        lv2:index 42 ; lv2:symbol "beat" ; lv2:name "Out: Beat" ;
         lv2:default 0 ; lv2:minimum 0 ; lv2:maximum 16 ;
     ] , [
         a lv2:OutputPort , lv2:ControlPort ;
-        lv2:index 35 ; lv2:symbol "run" ; lv2:name "Out: Run" ;
+        lv2:index 43 ; lv2:symbol "run" ; lv2:name "Out: Run" ;
         lv2:default 0 ; lv2:minimum 0 ; lv2:maximum 1 ;
     ] , [
         a lv2:OutputPort , lv2:ControlPort ;
-        lv2:index 36 ; lv2:symbol "slots" ; lv2:name "Out: Slots" ;
+        lv2:index 44 ; lv2:symbol "slots" ; lv2:name "Out: Slots" ;
         lv2:default 0 ; lv2:minimum 0 ; lv2:maximum 65535 ;
     ] , [
         a lv2:OutputPort , lv2:ControlPort ;
-        lv2:index 37 ; lv2:symbol "msg" ; lv2:name "Out: Msg" ;
+        lv2:index 45 ; lv2:symbol "msg" ; lv2:name "Out: Msg" ;
         lv2:default 0 ; lv2:minimum 0 ; lv2:maximum 100000 ;
     ] .

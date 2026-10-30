@@ -77,6 +77,8 @@ class zynthian_widget_midi_looper(zynthian_widget_base.zynthian_widget_base):
         self.hits = []
         self.last_click = 0.0
         self.cc_seq = 0
+        self._sync_n = 0
+        self._roll = False
         self.after(300, self._follow_tick)
 
     def on_size(self, event):
@@ -87,6 +89,8 @@ class zynthian_widget_midi_looper(zynthian_widget_base.zynthian_widget_base):
 
     # ---------- helpers ----------
     def _font(self, h, div, mn):
+        if self._roll:        # the Edit page is taller: scale back to the normal widget size
+            h = int(h * self.rows_normal / float(max(1, self.rows_edit)))
         return (zynthian_gui_config.font_family, max(mn, h // div))
 
     def _page_symbols(self):
@@ -521,6 +525,33 @@ class zynthian_widget_midi_looper(zynthian_widget_base.zynthian_widget_base):
                 cid = None
         return cid
 
+    def _own_bound_ccs(self):
+        """CC numbers bound (MIDI-learn) to this looper's own controls."""
+        cm = self.zyngui.state_manager.chain_manager
+        cid = self._chain_id_of(self.processor)
+        pid = getattr(self.processor, "id", None)
+        ccs = set()
+        if cid is None:
+            return ccs
+        for k, zl in cm.chain_midi_cc_binding.items():
+            if (k >> 16) == cid:
+                for z in zl:
+                    if getattr(z.processor, "id", None) == pid:
+                        ccs.add(k & 0xFF)
+        for k, zl in cm.absolute_midi_cc_binding.items():
+            for z in zl:
+                if getattr(z.processor, "id", None) == pid:
+                    ccs.add(k & 0xFF)
+        return ccs
+
+    def _sync_cc_ignore(self):
+        masks = [0] * 8
+        for cc in self._own_bound_ccs():
+            masks[(cc >> 4) & 7] |= 1 << (cc & 15)
+        for i, mval in enumerate(masks):
+            if int(self._zval("ccm%d" % i, 0)) != mval:
+                self._zset("ccm%d" % i, mval)
+
     def _inject_cc(self, ch, cc, val):
         cm = self.zyngui.state_manager.chain_manager
         cid = self._chain_id_of(self.processor)
@@ -540,6 +571,11 @@ class zynthian_widget_midi_looper(zynthian_widget_base.zynthian_widget_base):
             if id(z) in seen:
                 continue
             seen.add(id(z))
+            try:
+                if z.processor.id == self.processor.id:
+                    continue                      # never drive the looper's own controls from recorded CC
+            except Exception:
+                pass
             z.midi_control_change(val)
 
     def _follow_cc(self):
@@ -563,6 +599,10 @@ class zynthian_widget_midi_looper(zynthian_widget_base.zynthian_widget_base):
     def _follow_tick(self):
         try:
             self._follow_cc()
+            self._sync_n += 1
+            if self._sync_n >= 15:
+                self._sync_n = 0
+                self._sync_cc_ignore()
         except Exception as e:
             logging.debug("MIDI Looper CC follower: %s", e)
         self.after(33, self._follow_tick)
@@ -621,6 +661,7 @@ class zynthian_widget_midi_looper(zynthian_widget_base.zynthian_widget_base):
         else:
             mode = "main"
 
+        self._roll = (mode == "roll")
         self._set_rows(self.rows_edit if mode == "roll" else self.rows_normal)
 
         info = f"{bars:.1f} bars" if st in (2, 3) else (f"{bars:g} bars" if bars > 0 else "")
@@ -633,13 +674,13 @@ class zynthian_widget_midi_looper(zynthian_widget_base.zynthian_widget_base):
             cur = 0
             if self.data and 0 <= sel < len(self.data["transp"]):
                 cur = self.data["transp"][sel]
-            lcol = LAYER_COLORS[max(sel, 0) % 8]
-            c.create_text(8, 1, anchor="nw", tags="dyn", fill=lcol,
-                          text=f"Layer {sel + 1}   {cur:+d} > {cur + pend:+d}",
-                          font=self._font(h, 13, 8))
-            c.create_text(w - 8, 2, anchor="ne", tags="dyn", fill=zynthian_gui_config.color_tx,
+            c.create_text(8, 2, anchor="nw", tags="dyn", fill=col, text=STATES[st],
+                          font=self._font(h, 11, 9))
+            c.create_text(w // 2, 2, anchor="n", tags="dyn", fill=LAYER_COLORS[max(sel, 0) % 8],
+                          text="Layer %d" % (sel + 1), font=self._font(h, 11, 9))
+            c.create_text(w - 8, 3, anchor="ne", tags="dyn", fill=zynthian_gui_config.color_tx,
                           text=info, font=self._font(h, 15, 8))
-            x0, y0, x1, y1 = 8, int(h * 0.15), w - 8, int(h * 0.95)
+            x0, y0, x1, y1 = 8, int(h * 0.22), w - 8, int(h * 0.95)
             key = (self.cache_ver, sel, pend, w, h, ok)
             if key != self.roll_key:
                 self.roll_key = key
@@ -721,7 +762,7 @@ class zynthian_widget_midi_looper(zynthian_widget_base.zynthian_widget_base):
                     if exists:
                         self.hits.append((x, ya, x + lw, yb, "q", i))
             else:  # slots
-                cur = int(self._zval("slot", 0))
+                cur = int(self._zval("slot", 1))
                 sw = (w - 16 - 7 * 4) // 8
                 for i in range(16):
                     r, k = divmod(i, 8)
