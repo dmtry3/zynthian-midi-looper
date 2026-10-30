@@ -111,8 +111,7 @@ they can be mapped to hardware buttons.
 
 - Needs a running transport. Stopping/relocating the transport or changing tempo during the *first* recording
   cancels that recording.
-- CC mapped to **effect** parameters via Zynthian MIDI-learn is not reproduced (only the synth-side CC work):
-  MIDI-learn is handled by the Zynthian UI, upstream of the chain.
+- Played-back CC also drive Zynthian MIDI-learn bindings (synth and effect parameters, on-screen knobs). This is done by the widget, so it starts once the MIDI Looper page has been opened after boot. An echo guard prevents feedback loops.
 - Capacity: 8 layers x 4000 events, 16384 controller events.
 - Snapshots store control values only; loop data lives in slots (a saved slot is auto-loaded on restore).
 - Loop timing is tied to the transport position at the moment of recording.

@@ -64,6 +64,10 @@ typedef struct {
   int32_t transp[MAX_LAYERS];
   uint32_t ncc, pad;
 } VizHdr;
+/* table of the controller values the loop has just played (read by the widget) */
+typedef struct { uint32_t seq; uint8_t ch, cc, val, used; } VizCcEnt;
+typedef struct { uint32_t seq; VizCcEnt e[32]; } VizCc;
+#define VIZ_CC_OFF (sizeof(VizHdr) + (size_t)MAX_LAYERS * MAX_EVENTS * sizeof(Ev) + (size_t)MAX_CC * sizeof(Ev))
 
 typedef struct {
   const LV2_Atom_Sequence* in;
@@ -102,6 +106,9 @@ typedef struct {
   int npre;
   Ev* cc; uint32_t ncc;
   Touch touch[MAX_TOUCH];
+  VizCc* ccout;
+  uint64_t cc_out_t[16][128];
+  uint8_t cc_out_v[16][128];
 
   float prev[N_IN];
   uint64_t rise_at[N_IN];
@@ -426,6 +433,11 @@ static void cc_event(Looper* L, uint8_t st, uint8_t d1, uint8_t d2) {
   Touch* t = touch_get(L, key);
   const int64_t gap = (int64_t)(CC_GAP_SEC * L->sr);
   const uint64_t now = L->samples + L->cur_frame;
+  if ((st & 0xF0) == 0xB0) {                    /* our own CC coming back through Zynthian: ignore */
+    uint64_t ot = L->cc_out_t[st & 0x0F][d1];
+    int dv = (int)d2 - (int)L->cc_out_v[st & 0x0F][d1];
+    if (ot && (int64_t)(now - ot) < (int64_t)(0.15 * L->sr) && dv >= -2 && dv <= 2) return;
+  }
   int fresh = !t->active || (int64_t)(now - t->last_sample) > gap;
   int recording = advancing(L) &&
                   (L->state == ST_REC || L->state == ST_ARM_STOP || L->state == ST_OVERDUB);
@@ -799,6 +811,25 @@ static void process_controls(Looper* L) {
 }
 
 /* ---------- playback ---------- */
+static void ccout_note(Looper* L, uint8_t ch, uint8_t cc, uint8_t val) {
+  L->cc_out_t[ch & 15][cc & 127] = L->samples + L->cur_frame + 1;
+  L->cc_out_v[ch & 15][cc & 127] = val;
+  if (!L->ccout) return;
+  VizCc* t = L->ccout;
+  VizCcEnt* e = NULL;
+  for (int i = 0; i < 32; i++)
+    if (t->e[i].used && t->e[i].ch == ch && t->e[i].cc == cc) { e = &t->e[i]; break; }
+  if (!e) for (int i = 0; i < 32; i++) if (!t->e[i].used) { e = &t->e[i]; break; }
+  if (!e) {
+    e = &t->e[0];
+    for (int i = 1; i < 32; i++) if (t->e[i].seq < e->seq) e = &t->e[i];
+  }
+  e->ch = ch; e->cc = cc; e->val = val; e->used = 1;
+  uint32_t sq = t->seq + 1;
+  e->seq = sq;
+  __atomic_store_n(&t->seq, sq, __ATOMIC_RELEASE);
+}
+
 static void play_segment(Looper* L, uint32_t from, uint32_t to) {
   if (to <= from) return;
   const double t = tps(L), span = (to - from) * t, clk0 = L->clk;
@@ -892,7 +923,9 @@ static void play_segment(Looper* L, uint32_t from, uint32_t to) {
     buf[j + 1] = k;
   }
   for (int i = 0; i < nb; i++) {
-    if (!emit(L, buf[i].frame, buf[i].st, buf[i].d1, buf[i].d2) && buf[i].final)
+    int ok = emit(L, buf[i].frame, buf[i].st, buf[i].d1, buf[i].d2);
+    if (ok && (buf[i].st & 0xF0) == 0xB0) ccout_note(L, buf[i].st & 0x0F, buf[i].d1, buf[i].d2);
+    if (!ok && buf[i].final)
       L->lcnt[buf[i].st & 0x0F][buf[i].d1] = 1;   /* output buffer was full: the note-off is retried later */
   }
 #undef ADD
@@ -1107,7 +1140,7 @@ static LV2_Handle instantiate(const LV2_Descriptor* d, double rate, const char* 
 
   /* shared memory for the widget's piano roll */
   snprintf(L->viz_path, sizeof L->viz_path, "/dev/shm/midi_looper_%d", (int)getpid());
-  L->viz_size = sizeof(VizHdr) + (size_t)MAX_LAYERS * MAX_EVENTS * sizeof(Ev) + (size_t)MAX_CC * sizeof(Ev);
+  L->viz_size = sizeof(VizHdr) + (size_t)MAX_LAYERS * MAX_EVENTS * sizeof(Ev) + (size_t)MAX_CC * sizeof(Ev) + sizeof(VizCc);
   L->viz_fd = open(L->viz_path, O_RDWR | O_CREAT | O_TRUNC, 0644);
   if (L->viz_fd > 0 && ftruncate(L->viz_fd, (off_t)L->viz_size) == 0) {
     void* mp = mmap(NULL, L->viz_size, PROT_READ | PROT_WRITE, MAP_SHARED, L->viz_fd, 0);
@@ -1115,6 +1148,7 @@ static LV2_Handle instantiate(const LV2_Descriptor* d, double rate, const char* 
       L->viz = (VizHdr*)mp;
       memset(L->viz, 0, sizeof(VizHdr));
       L->viz->magic = VIZ_MAGIC;
+      L->ccout = (VizCc*)((uint8_t*)L->viz + VIZ_CC_OFF);
     }
   }
 

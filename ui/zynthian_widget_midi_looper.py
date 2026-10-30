@@ -26,6 +26,8 @@ CONFIRMS = {1: "Press again: CLEAR", 2: "Press again: DELETE LAYER", 3: "Press a
 
 HDR = struct.Struct("<8I8I8i2I")    # magic,seq,ver,loop_len,nlayers,bpb,state,mute ; n[8] ; transp[8] ; ncc,pad
 EV = struct.Struct("<IIBBBB")
+CCENT = struct.Struct("<IBBBB")                        # seq, ch, cc, val, used
+VIZ_CC_OFF = HDR.size + (8 * 4000 + 16384) * EV.size   # table of CC played by the loop
 MAGIC = 0x4D4C5A31
 PPQN = 960
 try:
@@ -74,6 +76,8 @@ class zynthian_widget_midi_looper(zynthian_widget_base.zynthian_widget_base):
         self.roll_key = None
         self.hits = []
         self.last_click = 0.0
+        self.cc_seq = 0
+        self.after(300, self._follow_tick)
 
     def on_size(self, event):
         if not super().on_size(event):
@@ -506,6 +510,63 @@ class zynthian_widget_midi_looper(zynthian_widget_base.zynthian_widget_base):
             self._toast("Export failed (see log)")
 
     # ---------- main loop ----------
+    # ---------- CC follower: play the loop's CC into Zynthian's MIDI-learn bindings ----------
+    @staticmethod
+    def _chain_id_of(proc):
+        cid = getattr(proc, "chain_id", None)
+        if cid is None:
+            try:
+                cid = proc.chain.chain_id
+            except Exception:
+                cid = None
+        return cid
+
+    def _inject_cc(self, ch, cc, val):
+        cm = self.zyngui.state_manager.chain_manager
+        cid = self._chain_id_of(self.processor)
+        if cid is None:
+            return
+        key_low = (ch << 8) | cc
+        zctrls = []
+        for k in ((cid << 16) | key_low, (cid << 16) | (0xFF << 8) | cc):
+            zctrls += list(cm.chain_midi_cc_binding.get(k, []))
+        for k, zl in cm.absolute_midi_cc_binding.items():
+            if (k & 0xFFFF) == key_low:
+                for z in zl:
+                    if self._chain_id_of(z.processor) == cid:
+                        zctrls.append(z)
+        seen = set()
+        for z in zctrls:
+            if id(z) in seen:
+                continue
+            seen.add(id(z))
+            z.midi_control_change(val)
+
+    def _follow_cc(self):
+        if not self._open_mm():
+            return
+        mm = self.mm
+        gseq = struct.unpack_from("<I", mm, VIZ_CC_OFF)[0]
+        if gseq < self.cc_seq:
+            self.cc_seq = 0
+        if gseq == self.cc_seq:
+            return
+        ents = []
+        for i in range(32):
+            seq, ch, cc, val, used = CCENT.unpack_from(mm, VIZ_CC_OFF + 4 + i * CCENT.size)
+            if used and seq > self.cc_seq:
+                ents.append((seq, ch, cc, val))
+        self.cc_seq = gseq
+        for (seq, ch, cc, val) in sorted(ents):
+            self._inject_cc(ch, cc, val)
+
+    def _follow_tick(self):
+        try:
+            self._follow_cc()
+        except Exception as e:
+            logging.debug("MIDI Looper CC follower: %s", e)
+        self.after(33, self._follow_tick)
+
     def refresh_gui(self):
         m = self.monitors or {}
         c = self.widget_canvas
