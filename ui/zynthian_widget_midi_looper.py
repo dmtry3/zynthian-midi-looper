@@ -118,11 +118,16 @@ class zynthian_widget_midi_looper(zynthian_widget_base.zynthian_widget_base):
         now = time.monotonic()
         if now - self.last_click < 0.25:
             return
-        for (x0, y0, x1, y1, i) in self.hits:
+        for (x0, y0, x1, y1, kind, i) in self.hits:
             if x0 <= event.x <= x1 and y0 <= event.y <= y1:
                 self.last_click = now
-                mask = int(self._zval("qmask", 255))
-                self._zset("qmask", mask ^ (1 << i))
+                if kind == "q":
+                    mask = int(self._zval("qmask", 255))
+                    self._zset("qmask", mask ^ (1 << i))
+                elif kind == "s":
+                    self._zset("slot", i + 1)
+                elif kind == "l":
+                    self._zset("layer", i + 1)
                 return
 
     def _open_mm(self):
@@ -548,6 +553,8 @@ class zynthian_widget_midi_looper(zynthian_widget_base.zynthian_widget_base):
             mode = "roll"
         elif "qapply" in syms:
             mode = "quant"
+        elif "lmute" in syms:
+            mode = "layers"
         elif "slot" in syms:
             mode = "slots"
         else:
@@ -611,6 +618,27 @@ class zynthian_widget_midi_looper(zynthian_widget_base.zynthian_widget_base):
                                       fill=(lc if muted else "#000000"), font=self._font(h, 18, 7))
                     else:
                         c.create_rectangle(x, ya, x + lw, yb, outline=zynthian_gui_config.color_tx_off, tags="dyn")
+            elif mode == "layers":
+                sel = int(self._zval("layer", 1)) - 1
+                c.create_text(8, int(h * 0.44), anchor="nw", text="Layers (tap to select):",
+                              fill=zynthian_gui_config.color_tx, tags="dyn", font=self._font(h, 15, 8))
+                lw = (w - 16 - 7 * 6) // 8
+                for i in range(8):
+                    x = 8 + i * (lw + 6)
+                    ya, yb = int(h * 0.58), int(h * 0.88)
+                    exists = i < nl
+                    muted = exists and ((mask >> i) & 1)
+                    lc = LAYER_COLORS[i]
+                    selected = exists and (i == sel)
+                    c.create_rectangle(x, ya, x + lw, yb, tags="dyn",
+                                       outline=("#ffffff" if selected else (lc if exists else zynthian_gui_config.color_tx_off)),
+                                       width=(4 if selected else (2 if exists else 1)),
+                                       fill=("" if (muted or not exists) else lc))
+                    c.create_text(x + lw // 2, (ya + yb) // 2, text=str(i + 1), tags="dyn",
+                                  fill=(lc if muted else ("#000000" if exists else "#505050")),
+                                  font=self._font(h, 14, 8))
+                    if exists:
+                        self.hits.append((x, ya, x + lw, yb, "l", i))
             elif mode == "quant":
                 qmask = int(self._zval("qmask", 255))
                 c.create_text(8, int(h * 0.44), anchor="nw", text="Quantize layers (tap to toggle):",
@@ -630,7 +658,7 @@ class zynthian_widget_midi_looper(zynthian_widget_base.zynthian_widget_base):
                                   fill=("#000000" if on else (lc if exists else "#505050")),
                                   font=self._font(h, 14, 8))
                     if exists:
-                        self.hits.append((x, ya, x + lw, yb, i))
+                        self.hits.append((x, ya, x + lw, yb, "q", i))
             else:  # slots
                 cur = int(self._zval("slot", 0))
                 sw = (w - 16 - 7 * 4) // 8
@@ -647,6 +675,7 @@ class zynthian_widget_midi_looper(zynthian_widget_base.zynthian_widget_base):
                                        fill=(zynthian_gui_config.color_hl if used else ""))
                     c.create_text(x + sw // 2, (ya + yb) // 2, text=str(i + 1), tags="dyn",
                                   fill=("#000000" if used else "#c0c0c0"), font=self._font(h, 18, 7))
+                    self.hits.append((x, ya, x + sw, yb, "s", i))
 
         text, tcol = None, "#ff9000"
         if conf in CONFIRMS:

@@ -53,7 +53,7 @@ typedef struct {
   Ev* cc; uint32_t ncc;
 } Snap;
 typedef struct { double clk; uint8_t ch, p; } Off;
-typedef struct { uint32_t frame; uint8_t prio, st, d1, d2; } Out;
+typedef struct { uint32_t frame; uint8_t prio, st, d1, d2, final; } Out;
 typedef struct { uint8_t ch, p, vel, closed; double on_clk, dur; } Pre;
 typedef struct { uint16_t key; uint8_t used, active, rec; uint64_t last_sample; double last_clk; uint32_t last_tick; } Touch;
 typedef struct { LV2_Atom_Event ev; uint8_t msg[3]; } MidiOut;
@@ -137,7 +137,7 @@ static int advancing(const Looper* L) { return L->rolling && !L->stop_pending; }
 static int msg_len(uint8_t st) { uint8_t t = st & 0xF0; return (t == 0xC0 || t == 0xD0) ? 2 : 3; }
 static void post_msg(Looper* L, int code) { L->msg_seq = (L->msg_seq + 1) % 1000; L->msg_code = code; }
 
-static void emit(Looper* L, uint32_t frame, uint8_t st, uint8_t d1, uint8_t d2) {
+static int emit(Looper* L, uint32_t frame, uint8_t st, uint8_t d1, uint8_t d2) {
   MidiOut e;
   memset(&e, 0, sizeof e);
   if (frame >= L->nframes) frame = L->nframes ? L->nframes - 1 : 0;
@@ -145,13 +145,13 @@ static void emit(Looper* L, uint32_t frame, uint8_t st, uint8_t d1, uint8_t d2) 
   e.ev.body.type = L->midi_Event;
   e.ev.body.size = msg_len(st);
   e.msg[0] = st; e.msg[1] = d1; e.msg[2] = d2;
-  lv2_atom_sequence_append_event(L->out, L->out_cap, &e.ev);
+  return lv2_atom_sequence_append_event(L->out, L->out_cap, &e.ev) != NULL;
 }
 
 static void silence_loop(Looper* L) {
   for (int c = 0; c < 16; c++)
     for (int p = 0; p < 128; p++)
-      if (L->lcnt[c][p]) { emit(L, L->cur_frame, 0x80 | c, p, 0); L->lcnt[c][p] = 0; }
+      if (L->lcnt[c][p] && emit(L, L->cur_frame, 0x80 | c, p, 0)) L->lcnt[c][p] = 0;
   L->noffs = 0;
 }
 
@@ -805,7 +805,7 @@ static void play_segment(Looper* L, uint32_t from, uint32_t to) {
   Out buf[MAX_SEG];
   int nb = 0;
 #define ADD(fr, pr, s, a, b) do { if (nb < MAX_SEG) { buf[nb].frame = (fr); buf[nb].prio = (pr); \
-  buf[nb].st = (s); buf[nb].d1 = (a); buf[nb].d2 = (b); nb++; } } while (0)
+  buf[nb].st = (s); buf[nb].d1 = (a); buf[nb].d2 = (b); buf[nb].final = 0; nb++; } } while (0)
 
   if ((L->state == ST_PLAY || L->state == ST_OVERDUB) && L->loop_len > 0) {
     const double len = L->loop_len;
@@ -871,7 +871,15 @@ static void play_segment(Looper* L, uint32_t from, uint32_t to) {
       uint32_t fr = from + (d > 0 ? (uint32_t)d : 0);
       if (fr >= to) fr = to - 1;
       uint8_t c = L->offs[i].ch, p = L->offs[i].p;
-      if (L->lcnt[c][p]) { L->lcnt[c][p]--; if (!L->lcnt[c][p]) ADD(fr, 0, 0x80 | c, p, 0); }
+      if (L->lcnt[c][p]) {
+        L->lcnt[c][p]--;
+        if (!L->lcnt[c][p]) {
+          int before = nb;
+          ADD(fr, 0, 0x80 | c, p, 0);
+          if (nb > before) buf[nb - 1].final = 1;
+          else L->lcnt[c][p] = 1;                 /* retried by reconcile_notes() */
+        }
+      }
       L->offs[i] = L->offs[--L->noffs];
     } else i++;
   }
@@ -883,7 +891,10 @@ static void play_segment(Looper* L, uint32_t from, uint32_t to) {
     }
     buf[j + 1] = k;
   }
-  for (int i = 0; i < nb; i++) emit(L, buf[i].frame, buf[i].st, buf[i].d1, buf[i].d2);
+  for (int i = 0; i < nb; i++) {
+    if (!emit(L, buf[i].frame, buf[i].st, buf[i].d1, buf[i].d2) && buf[i].final)
+      L->lcnt[buf[i].st & 0x0F][buf[i].d1] = 1;   /* output buffer was full: the note-off is retried later */
+  }
 #undef ADD
 }
 
@@ -1032,6 +1043,25 @@ static void update_outputs(Looper* L) {
   *L->outp[O_MSG] = (float)(L->msg_seq * 100 + L->msg_code);
 }
 
+/* Safety net: a sounding loop note must always have a pending note-off; otherwise release it. */
+static void reconcile_notes(Looper* L) {
+  uint8_t cnt[16][128];
+  memset(cnt, 0, sizeof cnt);
+  for (int i = 0; i < L->noffs; i++) {
+    uint8_t* q = &cnt[L->offs[i].ch & 15][L->offs[i].p & 127];
+    if (*q < 255) (*q)++;
+  }
+  for (int c = 0; c < 16; c++)
+    for (int p = 0; p < 128; p++) {
+      if (L->lcnt[c][p] <= cnt[c][p]) continue;
+      if (cnt[c][p] == 0) {
+        if (emit(L, L->nframes ? L->nframes - 1 : 0, 0x80 | c, p, 0)) L->lcnt[c][p] = 0;
+      } else {
+        L->lcnt[c][p] = cnt[c][p];
+      }
+    }
+}
+
 /* ---------- LV2 ---------- */
 static void free_all(Looper* L) {
   for (int i = 0; i < MAX_LAYERS; i++) free(L->layers[i].ev);
@@ -1141,6 +1171,7 @@ static void run(LV2_Handle h, uint32_t n) {
     else recalc_targets(L);
   }
   if (L->confirm && L->samples >= L->confirm_until) L->confirm = 0;
+  reconcile_notes(L);
   update_outputs(L);
   if (L->viz_dirty && L->samples >= L->viz_next) {
     viz_export(L);
