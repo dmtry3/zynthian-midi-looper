@@ -1,6 +1,7 @@
 # MIDI Looper для Zynthian
 
 [English version](README.md)
+Demo video https://www.youtube.com/watch?v=ChqsykTJQ88
 
 MIDI-лупер для [Zynthian](https://zynthian.org): **LV2-плагин (MIDI-инструмент)** внутри цепочки и необязательный
 **виджет на сенсорном экране** (piano roll, слои, слоты).
