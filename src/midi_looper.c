@@ -25,10 +25,10 @@
 #define MAX_SEG 1024
 #define MAX_PRE 64
 #define MAX_CC 16384
-#define CC_GAP_SEC 0.5     /* пауза ручки, после которой перезапись CC заканчивается */
+#define CC_GAP_SEC 0.5     /* knob pause after which CC overwriting ends */
 #define MAX_TOUCH 48
 #define PREROLL 360.0
-#define WRAP_SNAP 240          /* тиков: нота в овердабе, нажатая так близко к концу лупа, пишется в начало */
+#define WRAP_SNAP 240          /* ticks: an overdubbed note pressed this close to the loop end is placed at the loop start */
 #define N_IN 25
 #define N_OUT 11
 #define OUT_BASE 27
@@ -57,7 +57,7 @@ typedef struct { uint32_t frame; uint8_t prio, st, d1, d2; } Out;
 typedef struct { uint8_t ch, p, vel, closed; double on_clk, dur; } Pre;
 typedef struct { uint16_t key; uint8_t used, active, rec; uint64_t last_sample; double last_clk; uint32_t last_tick; } Touch;
 typedef struct { LV2_Atom_Event ev; uint8_t msg[3]; } MidiOut;
-/* заголовок снимка для виджета (96 байт), дальше подряд события слоёв */
+/* widget snapshot header (96 bytes), followed by the layer events */
 typedef struct {
   uint32_t magic, seq, ver, loop_len, nlayers, bpb, state, mute_mask;
   uint32_t n[MAX_LAYERS];
@@ -126,7 +126,7 @@ typedef struct {
 
 static const int bars_tbl[6] = { 0, 1, 2, 4, 8, 16 };
 
-/* ---------- утилиты ---------- */
+/* ---------- utilities ---------- */
 static double pmod(double a, double b) { double r = fmod(a, b); return r < 0 ? r + b : r; }
 static double tps(const Looper* L) { return L->bpm * PPQN / (60.0 * L->sr); }
 static double bar_ticks(const Looper* L) { return (double)L->bpb * PPQN; }
@@ -167,7 +167,7 @@ static double next_boundary(const Looper* L, int kind, int inclusive) {
   return L->clk + (u - r);
 }
 
-/* ---------- снимок для виджета (piano roll) ---------- */
+/* ---------- widget snapshot (piano roll) ---------- */
 static void viz_export(Looper* L) {
   if (!L->viz) return;
   VizHdr* h = L->viz;
@@ -193,7 +193,7 @@ static void viz_export(Looper* L) {
   __atomic_store_n(&h->seq, s + 2, __ATOMIC_RELEASE);
 }
 
-/* ---------- снимки данных (резерв, слоты) ---------- */
+/* ---------- data snapshots (backup, slots) ---------- */
 static int snap_alloc(Snap* s) {
   for (int i = 0; i < MAX_LAYERS; i++) {
     s->ev[i] = (Ev*)calloc(MAX_EVENTS, sizeof(Ev));
@@ -226,7 +226,7 @@ static void snap_to_layers(Looper* L, const Snap* s) {
 }
 static void backup_make(Looper* L) { snap_from_layers(L, &L->bk); L->bk_valid = 1; }
 
-/* ---------- файлы слотов (рабочий поток) ---------- */
+/* ---------- slot files (worker thread) ---------- */
 static void slot_path(const Looper* L, int slot, char* out, size_t sz) {
   snprintf(out, sz, "%s/slot%02d.mlp", L->dir, slot);
 }
@@ -300,7 +300,7 @@ static void worker_request(Looper* L, int req, int slot) {
   sem_post(&L->sem);
 }
 
-/* ---------- запись ---------- */
+/* ---------- recording ---------- */
 static uint32_t rec_tick(const Looper* L) {
   if (L->state == ST_REC || L->state == ST_ARM_STOP) {
     double d = L->clk - L->rec_start;
@@ -325,7 +325,7 @@ static void close_note(Looper* L, int ch, int p) {
   if (!ly) return;
   Ev* e = &ly->ev[L->open_i[ch][p]];
   uint32_t now = rec_tick(L), dur;
-  if (L->open_shift[ch][p]) {                      /* нота сдвинута в начало лупа: берём реальную длительность */
+  if (L->open_shift[ch][p]) {                      /* note moved to the loop start: use the real duration */
     double rd = L->clk - L->open_clk[ch][p];
     dur = rd < 1 ? 1 : (uint32_t)(rd + 0.5);
     L->open_shift[ch][p] = 0;
@@ -357,12 +357,12 @@ static void rec_note_on(Looper* L, int ch, int p, int vel) {
   L->open_L[ch][p] = &L->layers[L->nlayers - 1]; L->open_i[ch][p] = i;
   L->open_shift[ch][p] = 0;
   if (L->state == ST_OVERDUB && L->loop_len > 2 * WRAP_SNAP && e->tick + WRAP_SNAP >= L->loop_len) {
-    e->tick = 0;                                   /* вместо микроноты в конце: нота в начале лупа */
+    e->tick = 0;                                   /* instead of a micro-note at the end: the note goes to the loop start */
     L->open_shift[ch][p] = 1; L->open_clk[ch][p] = L->clk;
   }
 }
 
-/* ---------- CC, pitch bend, aftertouch: общая дорожка (не по слоям) ---------- */
+/* ---------- CC, pitch bend, aftertouch: shared lane (not per layer) ---------- */
 static uint16_t cc_key(uint8_t st, uint8_t d1) {
   uint8_t type = st & 0xF0;
   return (uint16_t)(((uint16_t)st << 8) | ((type == 0xB0 || type == 0xA0) ? d1 : 0));
@@ -419,8 +419,8 @@ static void cc_put(Looper* L, uint16_t key, uint8_t st, uint8_t d1, uint8_t d2, 
   Ev* e = &L->cc[L->ncc++];
   e->tick = tick; e->dur = 0; e->st = st; e->d1 = d1; e->d2 = d2; e->pad = 0;
 }
-/* Пришло значение контроллера: касание ручки глушит его воспроизведение из лупа,
-   а в REC/OVERDUB ещё и перезаписывает дорожку; пауза > CC_GAP_SEC = ручку отпустили. */
+/* A controller value arrived: touching the knob mutes its playback from the loop,
+   and in REC/OVERDUB it also overwrites the lane; a pause > CC_GAP_SEC = the knob was released. */
 static void cc_event(Looper* L, uint8_t st, uint8_t d1, uint8_t d2) {
   const uint16_t key = cc_key(st, d1);
   Touch* t = touch_get(L, key);
@@ -450,7 +450,7 @@ static void cc_event(Looper* L, uint8_t st, uint8_t d1, uint8_t d2) {
   t->last_sample = now;
 }
 
-/* ---------- состояния ---------- */
+/* ---------- states ---------- */
 static void reset_layers(Looper* L) {
   for (int i = 0; i < MAX_LAYERS; i++) { L->layers[i].n = 0; L->layers[i].muted = 0; L->layers[i].transp = 0; }
 }
@@ -537,7 +537,7 @@ static void arm_or_fire(Looper* L, int armstate) {
   if (armstate == ST_ARM_REC) L->npre = 0;
 }
 
-/* ---------- правки лупа ---------- */
+/* ---------- loop edits ---------- */
 static int editable(const Looper* L) {
   return (L->state == ST_PLAY || L->state == ST_STOP) && L->loop_len > 0 && L->nlayers > 0;
 }
@@ -615,7 +615,7 @@ static void edit_quantize(Looper* L) {
   post_msg(L, 7);
 }
 
-/* ---------- слоты ---------- */
+/* ---------- slots ---------- */
 static int cur_slot(const Looper* L) { return (int)(*L->ctl[I_SLOT] + 0.5f); }
 
 static void request_save(Looper* L) {
@@ -658,7 +658,7 @@ static void poll_worker(Looper* L) {
   }
 }
 
-/* ---------- команды ---------- */
+/* ---------- commands ---------- */
 static int confirm_cmd(Looper* L, int code) {
   if (L->confirm == code && L->samples < L->confirm_until) { L->confirm = 0; return 1; }
   L->confirm = code;
@@ -790,15 +790,15 @@ static void process_controls(Looper* L) {
       if (was == now) continue;
       int press;
       if (!is_momentary(i)) press = 1;
-      else if (now) { press = 1; L->rise_at[i] = L->samples; }                       /* нажатие */
-      else press = (L->samples - L->rise_at[i]) > (uint64_t)(1.0 * L->sr);           /* отпускание игнорируем, если < 1 с */
+      else if (now) { press = 1; L->rise_at[i] = L->samples; }                       /* press */
+      else press = (L->samples - L->rise_at[i]) > (uint64_t)(1.0 * L->sr);           /* ignore the release if < 1 s */
       if (press) run_cmd(L, i);
     }
   }
   memcpy(L->prev, cur, sizeof cur);
 }
 
-/* ---------- воспроизведение ---------- */
+/* ---------- playback ---------- */
 static void play_segment(Looper* L, uint32_t from, uint32_t to) {
   if (to <= from) return;
   const double t = tps(L), span = (to - from) * t, clk0 = L->clk;
@@ -910,7 +910,7 @@ static void advance_to(Looper* L, uint32_t target) {
   }
 }
 
-/* ---------- MIDI и транспорт ---------- */
+/* ---------- MIDI and transport ---------- */
 static double numv(const Looper* L, const LV2_Atom* a, double def) {
   if (!a) return def;
   if (a->type == L->atom_Float)  return ((const LV2_Atom_Float*)a)->body;
@@ -976,7 +976,7 @@ static void handle_midi(Looper* L, const LV2_Atom_Event* ev, uint32_t f) {
   int note_on = (type == 0x90 && d2 > 0);
   int note_off = (type == 0x80 || (type == 0x90 && d2 == 0));
 
-  emit(L, f, st, d1, d2);                       /* живая игра всегда проходит насквозь */
+  emit(L, f, st, d1, d2);                       /* live playing always passes through */
 
   if (note_on) L->held[ch][d1] = d2;
   else if (note_off) L->held[ch][d1] = 0;
@@ -1075,7 +1075,7 @@ static LV2_Handle instantiate(const LV2_Descriptor* d, double rate, const char* 
   L->sr = rate; L->bpm = 120.0; L->bpb = 4;
   L->state = ST_EMPTY; L->arm_clk = -1; L->auto_clk = -1;
 
-  /* общая память для piano roll в виджете */
+  /* shared memory for the widget's piano roll */
   snprintf(L->viz_path, sizeof L->viz_path, "/dev/shm/midi_looper_%d", (int)getpid());
   L->viz_size = sizeof(VizHdr) + (size_t)MAX_LAYERS * MAX_EVENTS * sizeof(Ev) + (size_t)MAX_CC * sizeof(Ev);
   L->viz_fd = open(L->viz_path, O_RDWR | O_CREAT | O_TRUNC, 0644);

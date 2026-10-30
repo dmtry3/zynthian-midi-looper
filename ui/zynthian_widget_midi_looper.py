@@ -32,9 +32,9 @@ try:
     from zynlibs.zynseq import zynseq as zynseq_mod
 except Exception:
     zynseq_mod = None
-EXPORT_STEPS_PER_BEAT = 4          # шагов на долю в экспортируемом паттерне
-EXPORT_USE_OFFSET = True           # сохранять точное время нот через смещение внутри шага
-CC_LANE = 0.74                      # доля высоты, которая остаётся нотам (остальное под дорожку CC)
+EXPORT_STEPS_PER_BEAT = 4          # steps per beat in the exported pattern
+EXPORT_USE_OFFSET = True           # keep exact note timing via an offset inside the step
+CC_LANE = 0.74                      # fraction of the height kept for notes (the rest is the CC lane)
 
 
 def dim(col, f):
@@ -81,7 +81,7 @@ class zynthian_widget_midi_looper(zynthian_widget_base.zynthian_widget_base):
         self.widget_canvas.grid(row=0, column=0, sticky='news')
         self.roll_key = None
 
-    # ---------- вспомогательное ----------
+    # ---------- helpers ----------
     def _font(self, h, div, mn):
         return (zynthian_gui_config.font_family, max(mn, h // div))
 
@@ -177,7 +177,7 @@ class zynthian_widget_midi_looper(zynthian_widget_base.zynthian_widget_base):
                     if typ == 0x90 and d > 0:
                         notes.append((t, d, p))
                         fl.append((t, d, st, p, v))
-                    elif typ in (0xB0, 0xA0, 0xD0, 0xE0):          # старые слои могли содержать CC
+                    elif typ in (0xB0, 0xA0, 0xD0, 0xE0):          # old layers could contain CC
                         ccs.append((t, st, p, v))
                 layers.append(notes)
                 fnotes.append(fl)
@@ -205,8 +205,8 @@ class zynthian_widget_midi_looper(zynthian_widget_base.zynthian_widget_base):
         bar = d["bpb"] * PPQN
         w = x1 - x0
         has_cc = bool(d["ccs"])
-        ny1 = y0 + int((y1 - y0) * CC_LANE) if has_cc else y1       # низ области нот
-        cy0, cy1 = ny1 + 4, y1                                        # дорожка CC
+        ny1 = y0 + int((y1 - y0) * CC_LANE) if has_cc else y1       # bottom of the notes area
+        cy0, cy1 = ny1 + 4, y1                                        # CC lane
 
         pitches = []
         for i, notes in enumerate(d["layers"]):
@@ -255,7 +255,7 @@ class zynthian_widget_midi_looper(zynthian_widget_base.zynthian_widget_base):
                 else:
                     c.create_rectangle(xa, y, max(xb, xa + 2), y + hgt, fill=color, width=0, tags="roll")
 
-        # CC: каждый контроллер своим цветом (ступенчатая линия + полупрозрачная штриховка)
+        # CC: each controller in its own colour (step line + semi-transparent hatching)
         if has_cc:
             curves = {}
             for (t, st, p, v) in d["ccs"]:
@@ -277,7 +277,7 @@ class zynthian_widget_midi_looper(zynthian_widget_base.zynthian_widget_base):
                                  outline="", tags="roll")
                 c.create_line(*pts, fill=col, width=1, tags="roll")
 
-        # ноты
+        # notes
         total = sum(len(n) for n in d["layers"])
         step = max(1, total // 1500)
         order = [i for i in range(len(d["layers"])) if i != sel]
@@ -304,7 +304,7 @@ class zynthian_widget_midi_looper(zynthian_widget_base.zynthian_widget_base):
                     if lo <= g <= hi:
                         rect(t, du, g, "#ffffff", outline=True)
 
-    # ---------- экспорт: .mid + паттерн секвенсора ----------
+    # ---------- export: .mid + sequencer pattern ----------
     def _toast(self, text, secs=3.0):
         self.toast = text
         self.toast_until = time.monotonic() + secs
@@ -369,7 +369,7 @@ class zynthian_widget_midi_looper(zynthian_widget_base.zynthian_widget_base):
         zs = self.zyngui.state_manager.zynseq
         lib = zs.libseq
         scene, phrase = zs.scene, zs.phrase
-        # 1. что сейчас в ячейке этой цепочки (фраза x канал)
+        # 1. what is currently in this chain's cell (phrase x channel)
         try:
             cell_pat = int(lib.getPattern(scene, phrase, chan, 0, 0))
         except Exception:
@@ -380,10 +380,10 @@ class zynthian_widget_midi_looper(zynthian_widget_base.zynthian_widget_base):
             playing = False
         assign = False
         if playing and cell_pat >= 1:
-            target = cell_pat                       # играющий паттерн перезаписываем
+            target = cell_pat                       # overwrite the playing pattern
         else:
             target = None
-            for n in range(1, 1000):                # первый пустой паттерн
+            for n in range(1, 1000):                # first empty pattern
                 try:
                     empty = zs.is_pattern_empty(n)
                 except Exception:
@@ -393,8 +393,8 @@ class zynthian_widget_midi_looper(zynthian_widget_base.zynthian_widget_base):
                     break
             if target is None:
                 raise RuntimeError("no free pattern")
-            assign = not (cell_pat >= 1)           # свободную ячейку займём новым паттерном
-        # 2. заполняем паттерн
+            assign = not (cell_pat >= 1)           # a free cell gets the new pattern
+        # 2. fill the pattern
         lib.selectPattern(target)
         lib.clearPattern(target)
         spb = EXPORT_STEPS_PER_BEAT
@@ -417,7 +417,7 @@ class zynthian_widget_midi_looper(zynthian_widget_base.zynthian_widget_base):
                 step = int(round(pos))
                 off = 0.0
             lib.addNote(step % nsteps, p, max(1, min(127, v)), max(0.1, du / step_ticks), off)
-        # CC: движение ручки превращаем в плавные отрезки по шагам
+        # CC: turn the knob movement into smooth per-step segments
         streams = {}
         for (t, st, d1, d2) in ccs:
             if (st & 0xF0) == 0xB0:
@@ -426,7 +426,7 @@ class zynthian_widget_midi_looper(zynthian_widget_base.zynthian_widget_base):
             evs.sort()
             segs, seg = [], [evs[0]]
             for e in evs[1:]:
-                if e[0] - seg[-1][0] > step_ticks * 2.5:      # пауза: новое движение ручки
+                if e[0] - seg[-1][0] > step_ticks * 2.5:      # pause: a new knob movement
                     segs.append(seg)
                     seg = [e]
                 else:
@@ -451,7 +451,7 @@ class zynthian_widget_midi_looper(zynthian_widget_base.zynthian_widget_base):
                     va = int(round(val_at(sidx * step_ticks)))
                     vb = int(round(val_at((sidx + 1) * step_ticks)))
                     lib.addControl(sidx % nsteps, cc, max(0, min(127, va)), max(0, min(127, vb)), 1, 0)
-        # 3. назначаем в ячейку, если она была свободна
+        # 3. assign to the cell if it was free
         if assign:
             try:
                 lib.setChannel(scene, phrase, chan, 0, chan)
@@ -500,7 +500,7 @@ class zynthian_widget_midi_looper(zynthian_widget_base.zynthian_widget_base):
         else:
             self._toast("Export failed (see log)")
 
-    # ---------- основной цикл ----------
+    # ---------- main loop ----------
     def refresh_gui(self):
         m = self.monitors or {}
         c = self.widget_canvas
